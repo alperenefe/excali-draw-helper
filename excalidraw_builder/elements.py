@@ -503,6 +503,7 @@ class Arrow(Element):
         start_fixed_point: Optional[list] = None,
         end_fixed_point: Optional[list] = None,
         element_id: Optional[str] = None,
+        label_offset: Tuple[float, float] = (0, 0),  # (x_offset, y_offset) for label positioning
     ):
         super().__init__(element_id)
         self.start = start
@@ -513,6 +514,7 @@ class Arrow(Element):
         self.end_binding = end_binding
         self.start_fixed_point = start_fixed_point
         self.end_fixed_point = end_fixed_point
+        self.label_offset = label_offset
         self.label_id = generate_id("arrow_label_") if label else None
     
     def midpoint_pos(self, circle_size: Tuple[float, float] = (28, 42)) -> Position:
@@ -600,9 +602,9 @@ class Arrow(Element):
         if not self.label:
             return None
         
-        # Calculate label position (middle of arrow)
-        label_x = (self.start[0] + self.end[0]) / 2 - 50
-        label_y = (self.start[1] + self.end[1]) / 2 - 10
+        # Calculate label position (middle of arrow) + offset for multiple arrows
+        label_x = (self.start[0] + self.end[0]) / 2 - 50 + self.label_offset[0]
+        label_y = (self.start[1] + self.end[1]) / 2 - 10 + self.label_offset[1]
         
         return {
             "type": "text",

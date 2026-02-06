@@ -186,16 +186,26 @@ class ExcalidrawDiagram:
         if not from_element or not to_element:
             raise ValueError("Both elements must exist in the diagram")
         
-        # Check for bidirectional arrows ONLY if explicitly requested
+        # Check for existing arrows between same elements
+        existing_arrow_same_direction = None
+        existing_arrow_opposite_direction = None
+        
+        for elem in self.elements:
+            if isinstance(elem, Arrow):
+                # Check SAME direction (from→to)
+                if elem.start_binding == from_id and elem.end_binding == to_id:
+                    existing_arrow_same_direction = elem
+                # Check OPPOSITE direction (to→from)
+                elif elem.start_binding == to_id and elem.end_binding == from_id:
+                    existing_arrow_opposite_direction = elem
+        
+        # Determine which existing arrow to use for offset calculation
         existing_arrow = None
-        if bidirectional:
-            for elem in self.elements:
-                if isinstance(elem, Arrow):
-                    # Match arrows in SAME direction (from→to) or OPPOSITE direction (to→from)
-                    if ((elem.start_binding == from_id and elem.end_binding == to_id) or
-                        (elem.start_binding == to_id and elem.end_binding == from_id)):
-                        existing_arrow = elem
-                        break
+        if bidirectional and existing_arrow_opposite_direction:
+            existing_arrow = existing_arrow_opposite_direction
+        elif existing_arrow_same_direction:
+            # Multiple arrows in same direction (not bidirectional, just multiple)
+            existing_arrow = existing_arrow_same_direction
         
         # Get base positions
         if isinstance(from_element, (Box, Circle)):
@@ -253,8 +263,8 @@ class ExcalidrawDiagram:
                     start_fixed_point = [0.5001, 0.0]
                     end_fixed_point = [0.5001, 1.0]
         
-        # Bidirectional offset logic (if enabled)
-        if existing_arrow and bidirectional:
+        # Multiple arrows offset logic (bidirectional OR same-direction multiple)
+        if existing_arrow:
             # Calculate box dimensions
             from_height = from_element.pos.height if isinstance(from_element, (Box, Circle)) else 100
             from_width = from_element.pos.width if isinstance(from_element, (Box, Circle)) else 100
@@ -274,7 +284,7 @@ class ExcalidrawDiagram:
             else:
                 # Vertical: offset horizontally
                 avg_width = (from_width + to_width) / 2
-                base_offset = avg_width * 0.35  # 35% of box width (increased from 25%)
+                base_offset = avg_width * 0.35  # 35% of box width
             
             # Scale based on distance (closer = more offset)
             if distance < 150:
@@ -284,9 +294,16 @@ class ExcalidrawDiagram:
             else:
                 offset = base_offset  # Far: base offset
             
-            # CRITICAL: Update the existing arrow with NEGATIVE offset (top/left per reading direction)!
-            # This ensures both arrows are separated: first=top/left (-offset), second=bottom/right (+offset)
-            self._update_existing_arrow_offset(existing_arrow, from_element, to_element, offset)
+            # For same-direction multiple arrows (not bidirectional), use full offset for clarity
+            if not bidirectional and existing_arrow_same_direction:
+                offset = offset * 1.0  # 100% of bidirectional offset (clear separation)
+            
+            # CRITICAL: Update the existing arrow with NEGATIVE offset ONLY for bidirectional
+            # For same-direction multiple arrows, we don't update the existing arrow
+            if bidirectional and existing_arrow_opposite_direction:
+                # Bidirectional: Update the opposite-direction arrow with NEGATIVE offset
+                # This ensures both arrows are separated: first=top/left (-offset), second=bottom/right (+offset)
+                self._update_existing_arrow_offset(existing_arrow, from_element, to_element, offset)
             
             # Boxes are horizontal (side by side) → offset vertically
             if abs(dx) > abs(dy):
@@ -348,6 +365,18 @@ class ExcalidrawDiagram:
                 end = (to_center[0], 
                       to_center[1] - (to_element.pos.height / 2 if isinstance(to_element, (Box, Circle)) else 0))
         
+        # Calculate label offset for multiple arrows
+        # Labels should ALSO offset in the same direction as arrows for better readability
+        label_offset = (0, 0)
+        if offset > 0:
+            if is_horizontal:
+                # Horizontal arrows (side-by-side): arrows offset vertically, labels also offset vertically
+                label_offset = (0, offset * 0.8)  # 80% of arrow offset (vertical)
+            else:
+                # Vertical arrows (top-bottom): arrows offset horizontally, labels also offset vertically
+                # This keeps labels at different heights for better readability
+                label_offset = (0, offset * 0.8)  # 80% of arrow offset (vertical)
+        
         # Create arrow
         arrow = Arrow(
             start=start,
@@ -358,6 +387,7 @@ class ExcalidrawDiagram:
             end_binding=to_id,
             start_fixed_point=start_fixed_point,
             end_fixed_point=end_fixed_point,
+            label_offset=label_offset,
         )
         
         # Add arrow to diagram
@@ -380,24 +410,47 @@ class ExcalidrawDiagram:
             clipboard_format: If True, uses "excalidraw/clipboard" format (for copy-paste)
                             If False, uses "excalidraw" format (for file save)
         """
-        elements = []
+        # Separate bounding boxes from other elements for proper z-ordering
+        bounding_boxes = []
+        other_elements = []
         
         for element in self.elements:
+            if isinstance(element, BoundingBox):
+                bounding_boxes.append(element)
+            else:
+                other_elements.append(element)
+        
+        # Render bounding boxes FIRST (so they appear in background)
+        # Then render all other elements (they will appear on top)
+        elements = []
+        
+        # First: Add all bounding boxes and their titles (with lower index for z-order)
+        for element in bounding_boxes:
+            bbox_dict = element.to_dict()
+            bbox_dict["index"] = "a0"  # Lower index = background
+            elements.append(bbox_dict)
+            title_elem = element.get_title_element()
+            if title_elem:
+                title_elem["index"] = "a0"
+                elements.append(title_elem)
+        
+        # Then: Add all other elements (with higher index for z-order)
+        for element in other_elements:
             # Add main element
-            elements.append(element.to_dict())
+            elem_dict = element.to_dict()
+            elem_dict["index"] = "a1"  # Higher index = foreground
+            elements.append(elem_dict)
             
             # Add associated text/title elements
             if isinstance(element, (Box, Circle)):
                 text_elem = element.get_text_element()
                 if text_elem:
+                    text_elem["index"] = "a1"
                     elements.append(text_elem)
-            elif isinstance(element, BoundingBox):
-                title_elem = element.get_title_element()
-                if title_elem:
-                    elements.append(title_elem)
             elif isinstance(element, Arrow):
                 label_elem = element.get_label_element()
                 if label_elem:
+                    label_elem["index"] = "a1"
                     elements.append(label_elem)
         
         if clipboard_format:
@@ -422,6 +475,64 @@ class ExcalidrawDiagram:
             }
         
         return json.dumps(diagram_data, indent=indent, ensure_ascii=False)
+    
+    def validate_bounding_box_overlaps(self, verbose: bool = True) -> List[dict]:
+        """Detect overlapping bounding boxes and return collision info.
+        
+        Args:
+            verbose: If True, prints warnings for overlaps
+            
+        Returns:
+            List of collision dicts with keys: 'box1', 'box2', 'overlap_area'
+        """
+        bounding_boxes = [elem for elem in self.elements if isinstance(elem, BoundingBox)]
+        collisions = []
+        
+        for i, box1 in enumerate(bounding_boxes):
+            for box2 in bounding_boxes[i+1:]:
+                # Calculate overlap
+                x1_min = box1.pos.x
+                x1_max = box1.pos.x + box1.pos.width
+                y1_min = box1.pos.y
+                y1_max = box1.pos.y + box1.pos.height
+                
+                x2_min = box2.pos.x
+                x2_max = box2.pos.x + box2.pos.width
+                y2_min = box2.pos.y
+                y2_max = box2.pos.y + box2.pos.height
+                
+                # Check for overlap
+                x_overlap = max(0, min(x1_max, x2_max) - max(x1_min, x2_min))
+                y_overlap = max(0, min(y1_max, y2_max) - max(y1_min, y2_min))
+                
+                if x_overlap > 0 and y_overlap > 0:
+                    overlap_area = x_overlap * y_overlap
+                    collision = {
+                        'box1': box1,
+                        'box2': box2,
+                        'overlap_area': overlap_area,
+                        'overlap_dims': (x_overlap, y_overlap)
+                    }
+                    collisions.append(collision)
+                    
+                    if verbose:
+                        box1_title = box1.title or f"BoundingBox@({box1.pos.x:.0f}, {box1.pos.y:.0f})"
+                        box2_title = box2.title or f"BoundingBox@({box2.pos.x:.0f}, {box2.pos.y:.0f})"
+                        print(f"⚠️  BOUNDING BOX OVERLAP DETECTED:")
+                        print(f"   Box 1: {box1_title}")
+                        print(f"   Box 2: {box2_title}")
+                        print(f"   Overlap: {x_overlap:.0f}x{y_overlap:.0f}px (area: {overlap_area:.0f}px²)")
+                        
+                        # Suggest fix
+                        suggested_offset = y1_max - y2_min + 100  # 100px margin
+                        if y2_min < y1_max:  # Box 2 needs to move down
+                            print(f"   💡 Suggestion: Move Box 2 down by {suggested_offset:.0f}px")
+                        print()
+        
+        if verbose and len(collisions) == 0:
+            print("✅ No bounding box overlaps detected!")
+        
+        return collisions
     
     def save(self, filepath: Union[str, Path], indent: int = 2, clipboard_format: bool = False) -> None:
         """Save diagram to file.

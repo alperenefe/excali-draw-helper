@@ -45,6 +45,70 @@ diagram.save("output/pipeline.excalidraw")
 
 ## 📦 Core Components
 
+### Automatic Bounding Boxes
+
+Bounding boxes automatically calculate their size based on contained elements:
+
+```python
+# Create elements
+box1 = Box(pos=Position(x=100, y=200, width=200, height=100), text="Source")
+box2 = Box(pos=Position(x=400, y=200, width=200, height=100), text="Process")
+box3 = Box(pos=Position(x=700, y=200, width=200, height=100), text="Output")
+
+diagram.add([box1, box2, box3])
+diagram.connect(box1, box2, "flow")
+diagram.connect(box2, box3, "flow")
+
+# Auto-sized bounding box wraps all 3 boxes!
+phase_bbox = diagram.create_bounding_box_for_elements(
+    elements=[box1, box2, box3],
+    title="Phase 1: Data Pipeline",
+    padding=50,  # Space around elements
+    stroke_style="dashed",
+    stroke_color=Color.BLUE_DARK,
+    stroke_width=2
+)
+
+# Add to background (renders behind elements)
+diagram.add_to_back(phase_bbox)
+```
+
+**Benefits:**
+- ✅ **Auto-calculates** min/max bounds from all elements
+- ✅ **Configurable padding** around contents
+- ✅ **Arrows included** in bound calculation
+- ✅ **Z-order control** via `add_to_back()`
+
+See `examples/auto_bounding_box_example.py` for full demo.
+
+**Converting manual to automatic:**
+
+```python
+# ❌ BEFORE (manual - brittle, needs updates when contents change)
+phase1_box = Box(
+    pos=Position(x=50, y=100, width=1750, height=550),  # Hard-coded!
+    text="",
+    style=BoxStyle(stroke_color=Color.GRAY, stroke_width=2, 
+                   border_style="dashed", background_color="transparent")
+)
+diagram.add(phase1_box)
+
+# ✅ AFTER (automatic - adapts to contents)
+# First add all phase 1 elements
+diagram.add([source_box, scheduler, output_table])
+diagram.connect(source_box, scheduler, "reads")
+diagram.connect(scheduler, output_table, "writes")
+
+# Then create auto-sized bounding box
+phase1_bbox = diagram.create_bounding_box_for_elements(
+    elements=[source_box, scheduler, output_table],
+    padding=50,
+    stroke_style="dashed",
+    stroke_color=Color.GRAY
+)
+diagram.add_to_back(phase1_bbox)  # Renders behind elements
+```
+
 ### Box - Smart Auto-Sizing
 
 ```python
