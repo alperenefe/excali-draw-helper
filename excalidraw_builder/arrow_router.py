@@ -256,3 +256,58 @@ class ArrowRouter:
         else:
             # Vertical arrows: labels offset vertically
             return (0, offset * 0.8)
+    
+    @staticmethod
+    def update_existing_arrow_offset(arrow: Arrow, from_element: Element, to_element: Element, 
+                                     offset: float) -> None:
+        """
+        Update existing arrow with negative offset (first arrow = top/left per reading direction).
+        
+        Args:
+            arrow: Existing arrow to update
+            from_element: Source element
+            to_element: Target element
+            offset: Offset value (will be negated for first arrow)
+        """
+        # Get centers
+        from_center = from_element.pos.center() if isinstance(from_element, (Box, Circle)) else (from_element.pos.x, from_element.pos.y)
+        to_center = to_element.pos.center() if isinstance(to_element, (Box, Circle)) else (to_element.pos.x, to_element.pos.y)
+        
+        # Calculate direction
+        dx = to_center[0] - from_center[0]
+        dy = to_center[1] - from_center[1]
+        
+        # Apply NEGATIVE offset (first arrow = top/left, follows reading direction)
+        actual_offset = -offset
+        
+        # Determine layout and update arrow
+        if abs(dx) > abs(dy):
+            # Horizontal layout: offset vertically
+            from_height = from_element.pos.height if isinstance(from_element, (Box, Circle)) else 100
+            to_height = to_element.pos.height if isinstance(to_element, (Box, Circle)) else 100
+            from_width = from_element.pos.width if isinstance(from_element, (Box, Circle)) else 100
+            to_width = to_element.pos.width if isinstance(to_element, (Box, Circle)) else 100
+            
+            y_offset_ratio_from = actual_offset / from_height
+            y_offset_ratio_to = actual_offset / to_height
+            
+            # Update arrow coordinates and fixed points
+            arrow.start = (from_center[0] + from_width / 2, from_center[1] + actual_offset)
+            arrow.end = (to_center[0] - to_width / 2, to_center[1] + actual_offset)
+            arrow.start_fixed_point = [1.0, 0.5 + y_offset_ratio_from]
+            arrow.end_fixed_point = [0.0, 0.5 + y_offset_ratio_to]
+        else:
+            # Vertical layout: offset horizontally
+            from_width = from_element.pos.width if isinstance(from_element, (Box, Circle)) else 100
+            to_width = to_element.pos.width if isinstance(to_element, (Box, Circle)) else 100
+            from_height = from_element.pos.height if isinstance(from_element, (Box, Circle)) else 100
+            to_height = to_element.pos.height if isinstance(to_element, (Box, Circle)) else 100
+            
+            x_offset_ratio_from = actual_offset / from_width
+            x_offset_ratio_to = actual_offset / to_width
+            
+            # Update arrow coordinates and fixed points
+            arrow.start = (from_center[0] + actual_offset, from_center[1] + from_height / 2)
+            arrow.end = (to_center[0] + actual_offset, to_center[1] - to_height / 2)
+            arrow.start_fixed_point = [0.5 + x_offset_ratio_from, 1.0]
+            arrow.end_fixed_point = [0.5 + x_offset_ratio_to, 0.0]
