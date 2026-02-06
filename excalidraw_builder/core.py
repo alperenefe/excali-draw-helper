@@ -7,6 +7,8 @@ from typing import List, Optional, Union
 from pathlib import Path
 
 from .elements import Element, Box, Arrow, Text, Circle, BoundingBox
+from .arrow_router import ArrowRouter
+from .layout_engine import LayoutEngine
 
 
 class ExcalidrawDiagram:
@@ -160,6 +162,48 @@ class ExcalidrawDiagram:
             arrow.start_fixed_point = [0.5 + x_offset_ratio_from, 1.0]
             arrow.end_fixed_point = [0.5 + x_offset_ratio_to, 0.0]
     
+    def _detect_existing_arrows(self, from_id: str, to_id: str, bidirectional: bool) -> tuple:
+        """Detect existing arrows between elements."""
+        existing_same = None
+        existing_opposite = None
+        
+        for elem in self.elements:
+            if isinstance(elem, Arrow):
+                if elem.start_binding == from_id and elem.end_binding == to_id:
+                    existing_same = elem
+                elif elem.start_binding == to_id and elem.end_binding == from_id:
+                    existing_opposite = elem
+        
+        existing_for_offset = None
+        if bidirectional and existing_opposite:
+            existing_for_offset = existing_opposite
+        elif existing_same:
+            existing_for_offset = existing_same
+        
+        return existing_for_offset, existing_opposite, existing_same
+    
+    def _calculate_arrow_direction(self, from_element, to_element) -> dict:
+        """Calculate arrow direction."""
+        if isinstance(from_element, (Box, Circle)):
+            from_center = from_element.pos.center()
+        else:
+            from_center = (from_element.pos.x, from_element.pos.y)
+        
+        if isinstance(to_element, (Box, Circle)):
+            to_center = to_element.pos.center()
+        else:
+            to_center = (to_element.pos.x, to_element.pos.y)
+        
+        dx = to_center[0] - from_center[0]
+        dy = to_center[1] - from_center[1]
+        
+        return {
+            'from_center': from_center,
+            'to_center': to_center,
+            'dx': dx,
+            'dy': dy
+        }
+    
     def connect(
         self,
         from_elem: Union[str, Element],
@@ -170,8 +214,14 @@ class ExcalidrawDiagram:
     ) -> Arrow:
         """Create an arrow connecting two elements with optional bidirectional offset.
         
-        Args:
-            bidirectional: If True, automatically offsets second arrow between same boxes
+        PIPELINE:
+        1. Detect existing arrows
+        2. Calculate direction
+        3. Calculate base offset
+        4. Apply adaptive offset (label-based)
+        5. Calculate arrow positions
+        6. Calculate label offset
+        7. Create and add arrow
         """
         from .styles import ArrowStyle
         
@@ -186,26 +236,13 @@ class ExcalidrawDiagram:
         if not from_element or not to_element:
             raise ValueError("Both elements must exist in the diagram")
         
-        # Check for existing arrows between same elements
-        existing_arrow_same_direction = None
-        existing_arrow_opposite_direction = None
+        # STEP 1: Detect existing arrows
+        existing_arrow, existing_arrow_opposite, existing_arrow_same = self._detect_existing_arrows(
+            from_id, to_id, bidirectional
+        )
         
-        for elem in self.elements:
-            if isinstance(elem, Arrow):
-                # Check SAME direction (from→to)
-                if elem.start_binding == from_id and elem.end_binding == to_id:
-                    existing_arrow_same_direction = elem
-                # Check OPPOSITE direction (to→from)
-                elif elem.start_binding == to_id and elem.end_binding == from_id:
-                    existing_arrow_opposite_direction = elem
-        
-        # Determine which existing arrow to use for offset calculation
-        existing_arrow = None
-        if bidirectional and existing_arrow_opposite_direction:
-            existing_arrow = existing_arrow_opposite_direction
-        elif existing_arrow_same_direction:
-            # Multiple arrows in same direction (not bidirectional, just multiple)
-            existing_arrow = existing_arrow_same_direction
+        # STEP 2: Calculate direction
+        direction = self._calculate_arrow_direction(from_element, to_element)
         
         # Get base positions
         if isinstance(from_element, (Box, Circle)):
@@ -295,12 +332,26 @@ class ExcalidrawDiagram:
                 offset = base_offset  # Far: base offset
             
             # For same-direction multiple arrows (not bidirectional), use full offset for clarity
-            if not bidirectional and existing_arrow_same_direction:
+            if not bidirectional and existing_arrow_same:
                 offset = offset * 1.0  # 100% of bidirectional offset (clear separation)
+            
+            # ADAPTIVE OFFSET: If label doesn't fit on arrow, increase offset
+            if label:
+                # Calculate label width (approximate)
+                label_width = len(label) * 8 + 20  # 8px per char + padding
+                
+                # Calculate arrow length
+                arrow_length = ((to_center[0] - from_center[0]) ** 2 + (to_center[1] - from_center[1]) ** 2) ** 0.5
+                
+                # If label doesn't fit on arrow (label > 80% of arrow length)
+                if label_width > arrow_length * 0.8:
+                    # Increase offset so arrows are further apart, giving label more space
+                    label_excess_ratio = label_width / arrow_length
+                    offset = offset * max(1.5, label_excess_ratio)  # At least 1.5x, scales with label size
             
             # CRITICAL: Update the existing arrow with NEGATIVE offset ONLY for bidirectional
             # For same-direction multiple arrows, we don't update the existing arrow
-            if bidirectional and existing_arrow_opposite_direction:
+            if bidirectional and existing_arrow_opposite:
                 # Bidirectional: Update the opposite-direction arrow with NEGATIVE offset
                 # This ensures both arrows are separated: first=top/left (-offset), second=bottom/right (+offset)
                 self._update_existing_arrow_offset(existing_arrow, from_element, to_element, offset)
@@ -365,17 +416,17 @@ class ExcalidrawDiagram:
                 end = (to_center[0], 
                       to_center[1] - (to_element.pos.height / 2 if isinstance(to_element, (Box, Circle)) else 0))
         
-        # Calculate label offset for multiple arrows
-        # Labels should ALSO offset in the same direction as arrows for better readability
+        # Calculate label offset based on arrow offset
+        # Label simply follows the arrow with a fixed ratio
         label_offset = (0, 0)
         if offset > 0:
+            # Label offset is 80% of arrow offset (follows arrow movement)
             if is_horizontal:
-                # Horizontal arrows (side-by-side): arrows offset vertically, labels also offset vertically
-                label_offset = (0, offset * 0.8)  # 80% of arrow offset (vertical)
+                # Horizontal arrows: labels offset vertically
+                label_offset = (0, offset * 0.8)
             else:
-                # Vertical arrows (top-bottom): arrows offset horizontally, labels also offset vertically
-                # This keeps labels at different heights for better readability
-                label_offset = (0, offset * 0.8)  # 80% of arrow offset (vertical)
+                # Vertical arrows: labels offset vertically
+                label_offset = (0, offset * 0.8)
         
         # Create arrow
         arrow = Arrow(
