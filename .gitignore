@@ -47,3 +47,9 @@ output/
 core_concepts.*
 *.pyc
 __pycache__/
+
+# Internal/Company-specific use cases (not generic examples)
+# These are specific production diagrams, not part of the library examples
+fashion_core_complete_clean.py
+home_furniture_current_state.py
+api_flow.py
